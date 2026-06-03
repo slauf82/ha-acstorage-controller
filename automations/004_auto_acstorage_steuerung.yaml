@@ -1,0 +1,213 @@
+- alias: PV ACStorage Steuerung Kostal Dual WR einfach
+  mode: single
+  max_exceeded: silent
+
+  trigger:
+    - platform: time_pattern
+      seconds: "/30"
+
+  condition:
+    - condition: template
+      value_template: >
+        {{
+          states('sensor.pv_ueberschuss_gefiltert') not in ['unknown','unavailable']
+          and states('sensor.kostal_wechselrichter_1_battery_soc') not in ['unknown','unavailable']
+          and states('sensor.kostal_wechselrichter_2_battery_soc') not in ['unknown','unavailable']
+          and states('sensor.kostal_wechselrichter_1_sum_power_of_all_pv_dc_inputs') not in ['unknown','unavailable']
+          and states('sensor.kostal_wechselrichter_2_sum_power_of_all_pv_dc_inputs') not in ['unknown','unavailable']
+        }}
+
+  action:
+    - variables:
+        grid: "{{ states('sensor.pv_ueberschuss_gefiltert') | float(0) }}"
+        start: "{{ states('input_number.export_on_threshold') | float(-300) }}"
+
+        soc1: "{{ states('sensor.kostal_wechselrichter_1_battery_soc') | float(0) }}"
+        soc2: "{{ states('sensor.kostal_wechselrichter_2_battery_soc') | float(0) }}"
+
+        diff: "{{ states('input_number.battery_soc_diff') | float(10) }}"
+        full: "{{ states('input_number.battery_full_threshold') | float(99) }}"
+        mode: "{{ states('input_select.battery_charge_mode') | default('balance') }}"
+
+        pv1: "{{ states('sensor.kostal_wechselrichter_1_sum_power_of_all_pv_dc_inputs') | float(0) }}"
+        pv2: "{{ states('sensor.kostal_wechselrichter_2_sum_power_of_all_pv_dc_inputs') | float(0) }}"
+        pv_min: 1000
+
+        has_surplus: "{{ grid < start }}"
+        wr1_available: "{{ has_surplus and pv1 > pv_min and soc1 < full }}"
+        wr2_available: "{{ has_surplus and pv2 > pv_min and soc2 < full }}"
+
+    - service: system_log.write
+      data:
+        level: warning
+        message: >
+          ACStorage:
+          grid={{ grid }}W,
+          start={{ start }}W,
+          has_surplus={{ has_surplus }},
+          pv1={{ pv1 }}W,
+          pv2={{ pv2 }}W,
+          pv_min={{ pv_min }}W,
+          soc1={{ soc1 }}%,
+          soc2={{ soc2 }}%,
+          full={{ full }}%,
+          diff={{ diff }}%,
+          mode={{ mode }},
+          wr1_available={{ wr1_available }},
+          wr2_available={{ wr2_available }}
+
+    - choose:
+
+        # MANUAL
+        - conditions:
+            - condition: template
+              value_template: "{{ mode == 'manual' }}"
+          sequence:
+            - service: system_log.write
+              data:
+                level: warning
+                message: "ACStorage: manual aktiv, keine automatische Änderung."
+
+        # KEIN WR VERFÜGBAR -> beide aus
+        - conditions:
+            - condition: template
+              value_template: "{{ not wr1_available and not wr2_available }}"
+          sequence:
+            - service: system_log.write
+              data:
+                level: warning
+                message: >
+                  ACStorage:
+                  Kein WR verfügbar.
+                  Gründe möglich:
+                  keine ausreichende Einspeisung,
+                  PV-Leistung am passenden WR zu gering,
+                  oder Batterie voll.
+                  Beide AUS.
+
+            - service: switch.turn_off
+              target:
+                entity_id:
+                  - switch.koplenti_acstorage_170
+                  - switch.koplenti_acstorage_172
+
+        # LADEN
+        - conditions:
+            - condition: template
+              value_template: "{{ wr1_available or wr2_available }}"
+          sequence:
+
+            - choose:
+
+                # BALANCE WR1
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{
+                          mode == 'balance'
+                          and wr1_available
+                          and (
+                            not wr2_available
+                            or soc1 <= (soc2 + diff)
+                          )
+                        }}
+                  sequence:
+                    - service: system_log.write
+                      data:
+                        level: warning
+                        message: "ACStorage: BALANCE -> WR1 EIN."
+
+                    - service: switch.turn_off
+                      target:
+                        entity_id: switch.koplenti_acstorage_172
+
+                    - delay: "00:00:03"
+
+                    - service: switch.turn_on
+                      target:
+                        entity_id: switch.koplenti_acstorage_170
+
+                # BALANCE WR2
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{
+                          mode == 'balance'
+                          and wr2_available
+                        }}
+                  sequence:
+                    - service: system_log.write
+                      data:
+                        level: warning
+                        message: "ACStorage: BALANCE -> WR2 EIN."
+
+                    - service: switch.turn_off
+                      target:
+                        entity_id: switch.koplenti_acstorage_170
+
+                    - delay: "00:00:03"
+
+                    - service: switch.turn_on
+                      target:
+                        entity_id: switch.koplenti_acstorage_172
+
+                # SEQUENTIAL WR1
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{
+                          mode == 'sequential'
+                          and wr1_available
+                        }}
+                  sequence:
+                    - service: system_log.write
+                      data:
+                        level: warning
+                        message: "ACStorage: SEQUENTIAL -> WR1 EIN."
+
+                    - service: switch.turn_off
+                      target:
+                        entity_id: switch.koplenti_acstorage_172
+
+                    - delay: "00:00:03"
+
+                    - service: switch.turn_on
+                      target:
+                        entity_id: switch.koplenti_acstorage_170
+
+                # SEQUENTIAL WR2
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{
+                          mode == 'sequential'
+                          and not wr1_available
+                          and wr2_available
+                        }}
+                  sequence:
+                    - service: system_log.write
+                      data:
+                        level: warning
+                        message: "ACStorage: SEQUENTIAL -> WR2 EIN."
+
+                    - service: switch.turn_off
+                      target:
+                        entity_id: switch.koplenti_acstorage_170
+
+                    - delay: "00:00:03"
+
+                    - service: switch.turn_on
+                      target:
+                        entity_id: switch.koplenti_acstorage_172
+
+              default:
+                - service: system_log.write
+                  data:
+                    level: warning
+                    message: "ACStorage: Laden erlaubt, aber kein Modus-Zweig passend. Beide AUS."
+
+                - service: switch.turn_off
+                  target:
+                    entity_id:
+                      - switch.koplenti_acstorage_170
+                      - switch.koplenti_acstorage_172

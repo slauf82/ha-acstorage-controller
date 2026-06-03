@@ -1,0 +1,30 @@
+input_select:
+  active_acstorage_wr:
+    name: Active ACStorage inverter
+    options:
+      - wr1
+      - wr2
+      - none
+    initial: none
+
+input_number:
+  export_on_threshold:
+    name: Export threshold to enable charging
+    min: -10000
+    max: 0
+    step: 10
+    unit_of_measurement: W
+
+  export_off_threshold:
+    name: Export threshold to disable charging
+    min: -10000
+    max: 1000
+    step: 10
+    unit_of_measurement: W
+
+  battery_full_threshold:
+    name: Battery full threshold
+    min: 50
+    max: 100
+    step: 1
+    unit_of_measurement: "%"

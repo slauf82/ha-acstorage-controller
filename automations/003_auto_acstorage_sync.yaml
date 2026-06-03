@@ -1,0 +1,16 @@
+- alias: "Synchronisiere Kostal AC-Schalter mit Sensorstatus"
+  trigger:
+      - platform: state
+        entity_id: sensor.ac_storage_1_status
+      - platform: state
+        entity_id: sensor.ac_storage_2_status
+  action:
+      - choose:
+          - conditions: "{{ states('sensor.ac_storage_1_status')|int == 1 or states('sensor.ac_storage_2_status')|int == 1 }}"
+            sequence:
+              - service: homeassistant.turn_on
+                entity_id: switch.kostal_ac_status
+          - conditions: "{{ states('sensor.ac_storage_1_status')|int == 0 and states('sensor.ac_storage_2_status')|int == 0 }}"
+            sequence:
+              - service: homeassistant.turn_off
+                entity_id: switch.kostal_ac_status
